@@ -50,6 +50,23 @@ chmod +x install.sh
 reboot
 ```
 
+## Creating a Bootable USB from Windows
+
+1. Download the Arch ISO: https://archlinux.org/download/
+2. Download Rufus: https://rufus.ie/
+3. Insert USB drive
+4. Open Rufus:
+   - Select your USB drive
+   - Select the Arch ISO
+   - Partition scheme: GPT
+   - Target system: UEFI
+   - Click Start
+5. Boot from USB (usually F12 or F2 at startup)
+
+Alternative tools:
+- [balenaEtcher](https://etcher.balena.io/) — simpler, just select ISO and drive
+- [Ventoy](https://ventoy.net/) — install once, then just drag ISOs onto the USB
+
 ## Roadmap
 
 - [ ] Phase 1: MVP (this script)
