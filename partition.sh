@@ -5,12 +5,44 @@
 set -e
 
 # =============================================================================
-# FIND LARGEST DISK
+# CONSTANTS
+# =============================================================================
+
+SECTOR_SIZE=512
+GPT_OVERHEAD_SECTORS=34
+ALIGNMENT_SECTOR=2048
+
+PARTITION_NUM_ROOT=1
+PARTITION_NUM_SWAP=99
+PARTITION_NUM_EFI=100
+
+DEFAULT_EFI_SIZE="256M"
+DEFAULT_SWAP_SIZE="8G"
+
+# =============================================================================
+# DISK DETECTION
 # =============================================================================
 
 find_largest_disk() {
   lsblk -dnbo NAME,SIZE,TYPE | awk '$3=="disk" {print $2, $1}' | sort -rn | head -1 | awk '{print $2}'
 }
+
+get_disk_size_bytes() {
+  lsblk -dnbo SIZE "/dev/$1"
+}
+
+get_partition_prefix() {
+  local disk=$1
+  if [[ "$disk" == nvme* ]]; then
+    echo "p"
+  else
+    echo ""
+  fi
+}
+
+# =============================================================================
+# SIZE CONVERSIONS
+# =============================================================================
 
 bytes_to_human() {
   local bytes=$1
@@ -23,32 +55,7 @@ bytes_to_human() {
   fi
 }
 
-get_disk_size_bytes() {
-  lsblk -dnbo SIZE "/dev/$1" 2>/dev/null
-}
-
-# =============================================================================
-# MAIN
-# =============================================================================
-
-DISK=$(find_largest_disk)
-DISK_SIZE=$(get_disk_size_bytes "$DISK")
-DISK_HUMAN=$(bytes_to_human "$DISK_SIZE")
-
-echo ""
-echo "Found largest disk: /dev/$DISK ($DISK_HUMAN)"
-echo ""
-
-# Get partition sizes
-read -p "EFI size [256M]: " EFI_SIZE
-EFI_SIZE=${EFI_SIZE:-256M}
-
-read -p "Swap size [8G]: " SWAP_SIZE
-SWAP_SIZE=${SWAP_SIZE:-8G}
-
-# Calculate root size (display only - it gets the rest)
-# Parse sizes to bytes for display
-parse_size() {
+human_to_bytes() {
   local size=$1
   local num=${size%[GMKgmk]*}
   local unit=${size##*[0-9]}
@@ -60,94 +67,156 @@ parse_size() {
   esac
 }
 
-EFI_BYTES=$(parse_size "$EFI_SIZE")
-SWAP_BYTES=$(parse_size "$SWAP_SIZE")
-ROOT_BYTES=$(( DISK_SIZE - EFI_BYTES - SWAP_BYTES - 1048576 ))  # 1MB for GPT overhead
+bytes_to_sectors() {
+  echo $(( $1 / SECTOR_SIZE ))
+}
+
+# =============================================================================
+# SECTOR CALCULATIONS
+# =============================================================================
+
+calculate_partition_sectors() {
+  local disk_bytes=$1
+  local efi_bytes=$2
+  local swap_bytes=$3
+
+  local total_sectors=$(bytes_to_sectors "$disk_bytes")
+  local efi_sectors=$(bytes_to_sectors "$efi_bytes")
+  local swap_sectors=$(bytes_to_sectors "$swap_bytes")
+
+  # Layout from end of disk backwards: [root] [swap] [efi] [gpt backup]
+  EFI_END=$(( total_sectors - GPT_OVERHEAD_SECTORS ))
+  EFI_START=$(( EFI_END - efi_sectors + 1 ))
+
+  SWAP_END=$(( EFI_START - 1 ))
+  SWAP_START=$(( SWAP_END - swap_sectors + 1 ))
+
+  ROOT_START=$ALIGNMENT_SECTOR
+  ROOT_END=$(( SWAP_START - 1 ))
+}
+
+# =============================================================================
+# USER INTERACTION
+# =============================================================================
+
+prompt_for_sizes() {
+  read -p "EFI size [$DEFAULT_EFI_SIZE]: " EFI_SIZE
+  EFI_SIZE=${EFI_SIZE:-$DEFAULT_EFI_SIZE}
+
+  read -p "Swap size [$DEFAULT_SWAP_SIZE]: " SWAP_SIZE
+  SWAP_SIZE=${SWAP_SIZE:-$DEFAULT_SWAP_SIZE}
+}
+
+display_partition_plan() {
+  local disk=$1
+  local root_human=$2
+  local swap_size=$3
+  local efi_size=$4
+  local part_root=$5
+  local part_swap=$6
+  local part_efi=$7
+
+  echo ""
+  echo "═══════════════════════════════════════════════════════════"
+  echo "  PARTITION PLAN: /dev/$disk"
+  echo "═══════════════════════════════════════════════════════════"
+  echo ""
+  echo "  Physical layout on disk:"
+  echo "  [root p$PARTITION_NUM_ROOT: $root_human] [swap p$PARTITION_NUM_SWAP: $swap_size] [efi p$PARTITION_NUM_EFI: $efi_size]"
+  echo ""
+  printf "  %-20s %-10s %s\n" "$part_root" "$root_human" "Linux filesystem (ext4)"
+  printf "  %-20s %-10s %s\n" "$part_swap" "$swap_size" "Linux swap"
+  printf "  %-20s %-10s %s\n" "$part_efi" "$efi_size" "EFI System (FAT32)"
+  echo ""
+  echo "═══════════════════════════════════════════════════════════"
+}
+
+confirm_destructive_operation() {
+  local disk=$1
+  echo ""
+  echo "  ⚠️  THIS WILL DESTROY ALL DATA ON /dev/$disk"
+  echo ""
+  read -p "  Continue? [y/N]: " CONFIRM
+  [[ "${CONFIRM,,}" == "y" ]]
+}
+
+# =============================================================================
+# PARTITIONING
+# =============================================================================
+
+wipe_disk() {
+  sgdisk --zap-all "/dev/$1"
+}
+
+create_partitions() {
+  local disk=$1
+  
+  sgdisk -n ${PARTITION_NUM_ROOT}:${ROOT_START}:${ROOT_END} \
+         -t ${PARTITION_NUM_ROOT}:8300 \
+         -c ${PARTITION_NUM_ROOT}:"Linux root" "/dev/$disk"
+  
+  sgdisk -n ${PARTITION_NUM_SWAP}:${SWAP_START}:${SWAP_END} \
+         -t ${PARTITION_NUM_SWAP}:8200 \
+         -c ${PARTITION_NUM_SWAP}:"Linux swap" "/dev/$disk"
+  
+  sgdisk -n ${PARTITION_NUM_EFI}:${EFI_START}:${EFI_END} \
+         -t ${PARTITION_NUM_EFI}:ef00 \
+         -c ${PARTITION_NUM_EFI}:"EFI System" "/dev/$disk"
+  
+  partprobe "/dev/$disk"
+  sleep 1
+}
+
+format_partitions() {
+  local part_root=$1
+  local part_swap=$2
+  local part_efi=$3
+
+  mkfs.ext4 -F "$part_root"
+  mkswap "$part_swap"
+  mkfs.fat -F32 "$part_efi"
+}
+
+# =============================================================================
+# MAIN
+# =============================================================================
+
+DISK=$(find_largest_disk)
+DISK_BYTES=$(get_disk_size_bytes "$DISK")
+DISK_HUMAN=$(bytes_to_human "$DISK_BYTES")
+PART_PREFIX=$(get_partition_prefix "$DISK")
+
+echo ""
+echo "Found largest disk: /dev/$DISK ($DISK_HUMAN)"
+echo ""
+
+prompt_for_sizes
+
+EFI_BYTES=$(human_to_bytes "$EFI_SIZE")
+SWAP_BYTES=$(human_to_bytes "$SWAP_SIZE")
+ROOT_BYTES=$(( DISK_BYTES - EFI_BYTES - SWAP_BYTES ))
 ROOT_HUMAN=$(bytes_to_human "$ROOT_BYTES")
 
-# Determine partition naming
-if [[ "$DISK" == nvme* ]]; then
-  P="p"  # nvme0n1p1
-else
-  P=""   # sda1
-fi
+calculate_partition_sectors "$DISK_BYTES" "$EFI_BYTES" "$SWAP_BYTES"
 
-PART_ROOT="/dev/${DISK}${P}1"
-PART_SWAP="/dev/${DISK}${P}99"
-PART_EFI="/dev/${DISK}${P}100"
+PART_ROOT="/dev/${DISK}${PART_PREFIX}${PARTITION_NUM_ROOT}"
+PART_SWAP="/dev/${DISK}${PART_PREFIX}${PARTITION_NUM_SWAP}"
+PART_EFI="/dev/${DISK}${PART_PREFIX}${PARTITION_NUM_EFI}"
 
-echo ""
-echo "═══════════════════════════════════════════════════════════"
-echo "  PARTITION PLAN: /dev/$DISK"
-echo "═══════════════════════════════════════════════════════════"
-echo ""
-echo "  Physical layout on disk:"
-echo "  [root p1: $ROOT_HUMAN] [swap p99: $SWAP_SIZE] [efi p100: $EFI_SIZE]"
-echo ""
-echo "  $PART_ROOT   $ROOT_HUMAN   Linux filesystem (ext4)"
-echo "  $PART_SWAP   $SWAP_SIZE       Linux swap"
-echo "  $PART_EFI  $EFI_SIZE      EFI System (FAT32)"
-echo ""
-echo "═══════════════════════════════════════════════════════════"
-echo ""
-echo "  ⚠️  THIS WILL DESTROY ALL DATA ON /dev/$DISK"
-echo ""
-read -p "  Continue? [y/N]: " CONFIRM
+display_partition_plan "$DISK" "$ROOT_HUMAN" "$SWAP_SIZE" "$EFI_SIZE" "$PART_ROOT" "$PART_SWAP" "$PART_EFI"
 
-if [[ "${CONFIRM,,}" != "y" ]]; then
+if ! confirm_destructive_operation "$DISK"; then
   echo "Aborted."
   exit 1
 fi
 
 echo ""
 echo "Partitioning /dev/$DISK..."
+wipe_disk "$DISK"
+create_partitions "$DISK"
 
-# Wipe and create GPT
-sgdisk --zap-all "/dev/$DISK"
-
-# Create partitions in physical order with specific partition numbers
-# p1 = root (first on disk, uses remaining space)
-# p99 = swap (middle)
-# p100 = EFI (last on disk)
-
-# Calculate sector positions (512-byte sectors)
-SECTOR_SIZE=512
-EFI_SECTORS=$(( EFI_BYTES / SECTOR_SIZE ))
-SWAP_SECTORS=$(( SWAP_BYTES / SECTOR_SIZE ))
-
-# Get total sectors
-TOTAL_SECTORS=$(( DISK_SIZE / SECTOR_SIZE ))
-
-# Layout from end of disk backwards:
-# Last 34 sectors reserved for backup GPT
-# EFI at the end
-# Swap before EFI
-# Root from sector 2048 to before swap
-
-EFI_END=$(( TOTAL_SECTORS - 34 ))
-EFI_START=$(( EFI_END - EFI_SECTORS + 1 ))
-
-SWAP_END=$(( EFI_START - 1 ))
-SWAP_START=$(( SWAP_END - SWAP_SECTORS + 1 ))
-
-ROOT_START=2048  # Standard alignment
-ROOT_END=$(( SWAP_START - 1 ))
-
-# Create partitions with explicit numbers
-sgdisk -n 1:${ROOT_START}:${ROOT_END} -t 1:8300 -c 1:"Linux root" "/dev/$DISK"
-sgdisk -n 99:${SWAP_START}:${SWAP_END} -t 99:8200 -c 99:"Linux swap" "/dev/$DISK"
-sgdisk -n 100:${EFI_START}:${EFI_END} -t 100:ef00 -c 100:"EFI System" "/dev/$DISK"
-
-# Reload partition table
-partprobe "/dev/$DISK"
-sleep 1
-
-echo ""
 echo "Formatting partitions..."
-
-mkfs.ext4 -F "$PART_ROOT"
-mkswap "$PART_SWAP"
-mkfs.fat -F32 "$PART_EFI"
+format_partitions "$PART_ROOT" "$PART_SWAP" "$PART_EFI"
 
 echo ""
 echo "═══════════════════════════════════════════════════════════"
@@ -157,4 +226,3 @@ echo ""
 echo "  Now run:"
 echo "  ./install.sh $PART_EFI $PART_SWAP $PART_ROOT"
 echo ""
-
