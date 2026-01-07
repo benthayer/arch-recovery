@@ -100,6 +100,8 @@ calculate_partition_sectors() {
 # =============================================================================
 
 prompt_for_sizes() {
+  echo "Enter sizes (e.g., 256M, 8G, 1T):"
+  echo ""
   read -p "EFI size [$DEFAULT_EFI_SIZE]: " EFI_SIZE
   EFI_SIZE=${EFI_SIZE:-$DEFAULT_EFI_SIZE}
 
