@@ -5,13 +5,14 @@
 Create a read-only deploy key for the `ben` repo with memorable passphrase.
 
 ```bash
-ssh-keygen -t ed25519 -a 100 -C "deploy key for ben repo" -f deploy_key
+ssh-keygen -t ed25519 -a 10000 -C "deploy key for ben repo" -f deploy_key
 # Use memorable passphrase (test with: npx zxcvbn-cli "your passphrase")
+# Decrypt takes ~2 min — that's fine for disaster recovery
 ```
 
 Security math:
-- `-a 100` = ~$300k to crack
-- Passphrase with ~10^14 guesses
+- `-a 10000` = ~$30 million to crack
+- Even a "weak" memorable passphrase becomes practically unleakable
 - Read-only access to dotfiles — not worth attacking
 
 Store the encrypted key in this repo. Passphrase is memorized.
