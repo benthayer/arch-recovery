@@ -1,0 +1,82 @@
+name: Build Arch ISO
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - '*.md'
+  workflow_dispatch:  # manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --privileged  # needed for mkarchiso
+    
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm
+          pacman -S --noconfirm archiso git
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build ISO
+        run: |
+          # Set up build directories
+          WORK_DIR="/tmp/archiso-build"
+          OUT_DIR="$GITHUB_WORKSPACE/out"
+          mkdir -p "$WORK_DIR" "$OUT_DIR"
+          
+          # Copy releng profile
+          cp -r /usr/share/archiso/configs/releng/* "$WORK_DIR/"
+          
+          # Add arch-restore to ISO
+          AIROOTFS="$WORK_DIR/airootfs"
+          mkdir -p "$AIROOTFS/root/arch-restore"
+          cp -r ./* "$AIROOTFS/root/arch-restore/" || true
+          rm -rf "$AIROOTFS/root/arch-restore/out"
+          rm -rf "$AIROOTFS/root/arch-restore/.git"
+          
+          # Symlink wifi command
+          mkdir -p "$AIROOTFS/usr/local/bin"
+          ln -sf /root/arch-restore/wifi "$AIROOTFS/usr/local/bin/wifi"
+          
+          # Add welcome message
+          cat >> "$AIROOTFS/root/.zshrc" << 'EOF'
+          
+          echo ""
+          echo "╔═══════════════════════════════════════════════════════════╗"
+          echo "║           ARCH RESTORE - Recovery Environment             ║"
+          echo "╠═══════════════════════════════════════════════════════════╣"
+          echo "║  1. Connect WiFi:    wifi                                 ║"
+          echo "║  2. Partition disk:  fdisk /dev/nvme0n1                   ║"
+          echo "║  3. Install:         cd arch-restore && ./install.sh      ║"
+          echo "╚═══════════════════════════════════════════════════════════╝"
+          echo ""
+          EOF
+          cp "$AIROOTFS/root/.zshrc" "$AIROOTFS/root/.bashrc" || true
+          
+          # Build ISO
+          mkarchiso -v -w "$WORK_DIR/work" -o "$OUT_DIR" "$WORK_DIR"
+          
+          # Rename for clarity
+          mv "$OUT_DIR"/archlinux-*.iso "$OUT_DIR/arch-restore.iso"
+
+      - name: Upload ISO artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arch-restore-iso
+          path: out/arch-restore.iso
+          retention-days: 30
+
+      - name: Create Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v1
+        with:
+          files: out/arch-restore.iso
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
