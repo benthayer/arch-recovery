@@ -1,5 +1,30 @@
 # TODO
 
+## Next Up: Deploy Key for Bootstrap
+
+Create a read-only deploy key for the `ben` repo with memorable passphrase.
+
+```bash
+ssh-keygen -t ed25519 -a 100 -C "deploy key for ben repo" -f deploy_key
+# Use memorable passphrase (test with: npx zxcvbn-cli "your passphrase")
+```
+
+Security math:
+- `-a 100` = ~$300k to crack
+- Passphrase with ~10^14 guesses
+- Read-only access to dotfiles — not worth attacking
+
+Store the encrypted key in this repo. Passphrase is memorized.
+
+Bootstrap flow:
+1. `install.sh` → reboot
+2. Copy deploy key from this repo, decrypt with memorized passphrase
+3. `git clone git@github.com:benthayer/ben.git ~/.ben`
+4. `~/.ben/setup/configure.sh`
+5. Later: get real SSH key from 1Password for full access
+
+---
+
 ## Remaining Gaps
 
 ### Minor Fixes
