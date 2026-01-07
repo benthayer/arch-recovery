@@ -23,12 +23,61 @@ This is a bare-metal recovery system. If your laptop dies, gets stolen, or you j
 
 ## What it doesn't do (yet)
 
-- Personal config (dotfiles, SSH keys, API keys)
 - Auto-detect disks/partitions
 - Handle dual-boot scenarios
 - Matrix screen animations
 
+## Full Bootstrap Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. ARCH-RESTORE (~15 min)                                      │
+│     Boot ISO → partition → ./install.sh → reboot                │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  2. PERSONALIZATION (~45 min)                                   │
+│     git clone https://github.com/benthayer/ben.git ~/.ben       │
+│     ~/.ben/setup/configure.sh                                   │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+┌─────────────────────────────────────────────────────────────────┐
+│  3. AUTH DANCE (~10 min)                                        │
+│     ssh-keygen, gh auth, gcloud auth, az login, doctl auth      │
+└─────────────────────────────────────────────────────────────────┘
+                              ↓
+                           DONE
+```
+
+**Total recovery time: ~1 hour**
+
+### What's Automated
+
+| Component | Handled by |
+|-----------|------------|
+| Base Arch system | `arch-restore/install.sh` |
+| i3 + sddm + NetworkManager | `arch-restore/install.sh` |
+| All packages (pacman + AUR) | `~/.ben/setup/configure.sh` |
+| Dotfiles + configs | `~/.ben/setup/configure.sh` |
+| oh-my-zsh, nvm, node, bun | `~/.ben/setup/configure.sh` |
+| toggl CLI | `~/.ben/setup/configure.sh` |
+| Docker, CUPS, Bluetooth | `~/.ben/setup/configure.sh` |
+| System configs (/etc) | `~/.ben/setup/configure.sh` |
+
+### What's Manual (inherently interactive)
+
+| What | Why |
+|------|-----|
+| SSH key generation | Passphrase decision |
+| `gh auth login` | OAuth browser flow |
+| `gcloud auth login` | OAuth browser flow |
+| `az login` | OAuth browser flow |
+| `doctl auth init` | Token input |
+| `.passwords` file | Contains secrets |
+
 ## Usage
+
+### Phase 1: Base System
 
 ```bash
 # Boot Arch ISO, connect to WiFi
@@ -44,10 +93,35 @@ chmod +x install.sh
 #   - Partition 2: Rest, Linux filesystem
 
 # Run it
-./install.sh /dev/nvme0n1 /dev/nvme0n1p1 /dev/nvme0n1p2
+./install.sh /dev/nvme0n1p1 /dev/nvme0n1p2
 
 # Reboot
 reboot
+```
+
+### Phase 2: Personalization
+
+```bash
+# Login as ben (password: changeme)
+# Connect to WiFi
+nmcli device wifi connect "YourWiFi" password "YourPassword"
+
+# Clone and run
+git clone https://github.com/benthayer/ben.git ~/.ben
+~/.ben/setup/configure.sh
+
+# Reboot
+reboot
+```
+
+### Phase 3: Auth
+
+```bash
+ssh-keygen -t ed25519 -C "ben@benthayer.com"
+gh auth login
+gcloud auth login
+az login
+doctl auth init
 ```
 
 ## Creating a Bootable USB from Windows
@@ -69,13 +143,14 @@ Alternative tools:
 
 ## Roadmap
 
-- [ ] Phase 1: MVP (this script)
-- [ ] Phase 2: Auto-detect disks, handle different hardware
-- [ ] Phase 3: Personal config bootstrap (Keybase, dotfiles)
-- [ ] Phase 4: Custom ISO with script baked in
-- [ ] Phase 5: Windows-to-Linux exe installer
-- [ ] Phase 6: Matrix boot screens
-- [ ] Phase 7: Voice activation ("Captain on deck")
+- [x] Phase 1: MVP base system install
+- [x] Phase 2: Personal config bootstrap (dotfiles, packages, tools)
+- [ ] Phase 3: Auto-detect disks, handle different hardware
+- [ ] Phase 4: Secrets via Keybase
+- [ ] Phase 5: Custom ISO with script baked in
+- [ ] Phase 6: Windows-to-Linux exe installer
+- [ ] Phase 7: Matrix boot screens
+- [ ] Phase 8: Voice activation ("Captain on deck")
 
 ## The Philosophy
 
