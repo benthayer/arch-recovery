@@ -127,7 +127,7 @@ print_success() {
   echo "Reboot and login as '$USERNAME' with password '$DEFAULT_PASSWORD'"
   echo ""
   echo "Then run personalization:"
-  echo "  curl -O https://raw.githubusercontent.com/benthayer/bin/main/configure.sh"
+  echo "  curl -O https://raw.githubusercontent.com/benthayer/ben/main/configure.sh"
   echo "  chmod +x configure.sh && ./configure.sh"
   echo "=========================================="
 }
